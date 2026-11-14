@@ -1,0 +1,29 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache & build files
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# PyTorch / training checkpoints & weights
+*.pt
+*.pth
+*.bin
+*.ckpt
+wandb/
+
+# Data directory (if downloading Shakespeare locally)
+data/
+*.txt
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
