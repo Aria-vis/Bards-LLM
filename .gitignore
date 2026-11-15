@@ -18,9 +18,10 @@ build/
 *.ckpt
 wandb/
 
-# Data directory (if downloading Shakespeare locally)
-data/
-*.txt
+# Data artifacts
+data/*.txt
+data/*.bin
+data/*.pkl
 
 # Editor / OS files
 .vscode/
