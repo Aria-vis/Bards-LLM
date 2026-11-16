@@ -222,6 +222,101 @@ class BardLM(nn.Module):
             loss = None
 
         return logits, loss
+    
+    @classmethod
+    def from_pretrained(cls, model_type: str = "gpt2"):
+        """
+        Loads official pretrained GPT-2 model weights from Hugging Face into our custom BardLM architecture.
+        Supported models: 'gpt2' (124M), 'gpt2-medium' (350M), 'gpt2-large' (774M), 'gpt2-xl' (1558M).
+        """
+        assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}, (
+            f"Unsupported model type: {model_type}"
+        )
+        from transformers import GPT2LMHeadModel
+
+        print(f"Loading official OpenAI weights for '{model_type}' via Hugging Face...")
+
+        # Model architecture presets for GPT-2 family
+        config_args = {
+            "gpt2": dict(n_layer=12, n_head=12, n_embd=768),        # 124M params
+            "gpt2-medium": dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
+            "gpt2-large": dict(n_layer=36, n_head=20, n_embd=1280),  # 774M params
+            "gpt2-xl": dict(n_layer=48, n_head=25, n_embd=1600),     # 1558M params
+        }[model_type]
+
+        # GPT-2 defaults: vocab=50257, block_size=1024, bias=True
+        config = BardConfig(
+            block_size=1024,
+            vocab_size=50257,
+            n_layer=config_args["n_layer"],
+            n_head=config_args["n_head"],
+            n_embd=config_args["n_embd"],
+            dropout=0.0,
+            bias=True,  # OpenAI's GPT-2 uses bias in linear and layernorm layers
+        )
+
+        model = cls(config)
+        sd = model.state_dict()
+        sd_keys = [k for k in sd.keys() if not k.endswith(".causal_mask")]
+
+        # Fetch Hugging Face GPT-2 weights
+        hf_model = GPT2LMHeadModel.from_pretrained(model_type)
+        hf_sd = hf_model.state_dict()
+
+        # Filter out HF-specific non-parameter buffers
+        hf_keys = [
+            k for k in hf_sd.keys()
+            if not k.endswith(".attn.bias") and not k.endswith(".attn.masked_bias")
+        ]
+
+        # Key mapping dictionary: maps HuggingFace parameter names to our BardLM parameter names
+        # HF naming: transformer.h.0.attn.c_attn.weight -> BardLM naming: transformer.h.0.attn.qkv_proj.weight
+        mapping = {
+            "attn.c_attn.weight": "attn.qkv_proj.weight",
+            "attn.c_attn.bias": "attn.qkv_proj.bias",
+            "attn.c_proj.weight": "attn.out_proj.weight",
+            "attn.c_proj.bias": "attn.out_proj.bias",
+            "mlp.c_fc.weight": "mlp.fc.weight",
+            "mlp.c_fc.bias": "mlp.fc.bias",
+            "mlp.c_proj.weight": "mlp.proj.weight",
+            "mlp.c_proj.bias": "mlp.proj.bias",
+        }
+
+        # Weight tensors that require transposition from [fan_in, fan_out] to [fan_out, fan_in]
+        transposed_suffixes = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
+
+        # Copy each weight into our model
+        for hf_key in hf_keys:
+            # Determine destination key name in BardLM
+            dest_key = hf_key
+            for src_suffix, dest_suffix in mapping.items():
+                if hf_key.endswith(src_suffix):
+                    dest_key = hf_key.replace(src_suffix, dest_suffix)
+                    break
+
+            assert dest_key in sd, f"Key mismatch: {dest_key} not in BardLM state_dict"
+
+            # Check if this weight needs transposing
+            if any(hf_key.endswith(suffix) for suffix in transposed_suffixes):
+                assert hf_sd[hf_key].shape[::-1] == sd[dest_key].shape, (
+                    f"Shape mismatch for transposed key {hf_key}"
+                )
+                with torch.no_grad():
+                    sd[dest_key].copy_(hf_sd[hf_key].t())
+            else:
+                assert hf_sd[hf_key].shape == sd[dest_key].shape, (
+                    f"Shape mismatch for key {hf_key}: {hf_sd[hf_key].shape} vs {sd[dest_key].shape}"
+                )
+                with torch.no_grad():
+                    sd[dest_key].copy_(hf_sd[hf_key])
+
+        print(f"Successfully loaded {len(hf_keys)} parameter tensors into BardLM!")
+        return model
 
     def configure_optimizers(
         self, weight_decay: float, learning_rate: float, betas: tuple[float, float], device_type: str
